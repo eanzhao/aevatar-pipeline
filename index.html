@@ -50,8 +50,9 @@
           </div>
 
           <p class="phase-summary">
-            别把 Aevatar 理解成“收到请求就直接跑代码”。它会先收请求，判断这次到底要跑 workflow、
-            script，还是只是给现有 run 发控制命令；然后再开独立的 runtime actor，把结果投影成查询数据和实时事件。
+            别把 Aevatar 理解成“收到请求就直接跑代码”。从整体架构看，它会先判断这次该落到哪类运行模型，
+            再准备对应的 runtime actor；但当前仓库里对外的 `/api/chat`、`resume`、`signal` 这组 capability API，
+            默认直接落到 workflow capability，不是通用的 script execution 入口。
           </p>
 
           <div class="event-ribbon" aria-label="Pipeline Summary">
@@ -93,29 +94,29 @@
               </summary>
               <div class="step-detail-body">
                 <p>Aevatar 的执行根是 actor。Application 会先判断这是要新开一次运行，还是去恢复、控制一条已经存在的 run。</p>
-                <p>技术上，这一步会把请求送进 command pipeline，由 resolver / binder 决定目标 actor 和观察链路怎么挂。它先解决“谁来接这单”，而不是“马上怎么执行”。</p>
+                <p>技术上，这一步会把请求送进 command pipeline，由 resolver / binder 决定目标 actor 和观察链路怎么挂。对当前这组 capability API 来说，chat 请求会先被折叠成 workflow run target，`resume` 和 `signal` 则直接指向已有 run actor。它先解决“谁来接这单”，而不是“马上怎么执行”。</p>
               </div>
             </details>
 
             <details class="step-disclosure">
               <summary class="step-summary">
                 <span class="step-summary-index">03</span>
-                <span class="step-summary-text">先找到对的 workflow，或者对的 script revision</span>
+                <span class="step-summary-text">先把这次运行要用的 definition 绑定准确</span>
               </summary>
               <div class="step-detail-body">
-                <p>workflow 分支会先确认这次到底该跑哪一个 workflow，而且要跑对。来源可能是 registry、inline YAML，或者某个已经绑定了 definition 的 source actor。</p>
-                <p>scripting 分支则先从 `ScriptCatalogGAgent` 查当前激活 revision，再由 `ScriptDefinitionGAgent` 提供源码、脚本包和 schema。这一步本质上是在确定 definition。</p>
+                <p>workflow 分支里，这一步会先确认这次到底该跑哪一个 workflow，而且要跑对。来源可能是 registry、inline YAML，或者某个已经绑定了 definition 的 source actor；如果用户显式指定了 workflow name，系统还会校验它和 source binding 是否一致，避免跑错流程。</p>
+                <p>scripting 分支里，`script revision` 指的是同一个 `scriptId` 下某一版脚本定义的版本号，不是另一条执行链路。更准确地说，这一步是在先确定要用哪个 `definitionActorId`，必要时再带上 `requestedRevision` 作为版本约束；catalog 维护“当前激活的是哪个 revision”，runtime 真正执行时还是拿 `definitionActorId + requestedRevision` 去 `ScriptDefinitionGAgent` 查询 definition snapshot。</p>
               </div>
             </details>
 
             <details class="step-disclosure">
               <summary class="step-summary">
                 <span class="step-summary-index">04</span>
-                <span class="step-summary-text">再为这次运行单独开一个 runtime actor</span>
+                <span class="step-summary-text">再为这次执行准备一个 runtime actor</span>
               </summary>
               <div class="step-detail-body">
-                <p>拿到 definition 之后，系统不会直接在 definition actor 上开跑。workflow 会新建 `WorkflowRunGAgent`；scripting 会用 `ScriptRuntimeGAgent`。</p>
-                <p>这样每次 run 都有自己的状态边界。变量、挂起点、重试、超时和最终结果，都会放在这个 runtime actor 里。</p>
+                <p>拿到 definition 之后，系统不会直接在 definition actor 上开跑。workflow 这边是一 run 一个 `WorkflowRunGAgent`；scripting 这边则会准备一个 `ScriptRuntimeGAgent` 来承接这次脚本运行，默认也会生成新的 runtime actor id。</p>
+                <p>这样执行状态就有清晰边界。变量、挂起点、重试、超时和最终结果，都放在 runtime actor 里；definition actor 继续只保存“跑什么”，不混进“这次怎么跑”的事实。</p>
               </div>
             </details>
 
@@ -125,7 +126,7 @@
                 <span class="step-summary-text">runtime actor 开始真正执行</span>
               </summary>
               <div class="step-detail-body">
-                <p>workflow 路径里，`WorkflowExecutionKernel` 会推进 step 主循环：发 `StepRequestEvent`，等模块回 `StepCompletedEvent`，再决定下一步。`llm_call`、`connector_call`、`wait_signal`、`human_*` 都是在这里真正发生的。</p>
+                <p>workflow 路径里，`WorkflowExecutionKernel` 会推进 step 主循环：发 `StepRequestEvent`，等模块回 `StepCompletedEvent`，再决定下一步。`connector_call`、`wait_signal`、`human_*` 都是在这里真正发生的；如果 step 配了 `target_role`，`llm_call` 会把请求交给对应的 run-scoped `RoleGAgent`，如果配了 `agent_type`，也可以解析到自定义 `IAgent`。</p>
                 <p>scripting 路径里，`ScriptRuntimeGAgent` 会先查询 definition snapshot，再执行脚本逻辑。也就是说，这一步不是笼统地“分岔”，而是两个 runtime 分别进入自己的执行引擎。</p>
               </div>
             </details>
@@ -136,8 +137,8 @@
                 <span class="step-summary-text">执行过程中的状态和事件持续写回 actor</span>
               </summary>
               <div class="step-detail-body">
-                <p>每次步骤开始、完成、失败、挂起或恢复，runtime actor 都会把状态变化和运行事件写回自己的事实源。</p>
-                <p>所以 write side 在 actor 里，不在 controller、UI 或临时 service 里；恢复执行时也靠这些已经写回去的事实继续推进。</p>
+                <p>运行不是最后才记一笔结果。每次步骤开始、完成、失败、挂起或恢复，runtime actor 都会把状态变化持续写回自己的事实层。这样一条 run 就算中途停住，系统后面也知道它停在哪、还在等什么、最后为什么结束。</p>
+                <p>技术上，workflow 会把 `WorkflowRunExecutionStartedEvent`、`WorkflowCompletedEvent` 和各模块写进 `ExecutionStates` 的运行态落回 run actor；`wait_signal`、`human_input`、`human_approval` 这类 pending 信息也在这里。scripting 则会先记下待完成的 definition query，再把真正执行产出的 `ScriptRunDomainEventCommitted` 以及 state/read-model payload 写回去。所以 write side 在 actor 里，不在 controller、UI 或临时 service 里。</p>
               </div>
             </details>
 
@@ -147,8 +148,8 @@
                 <span class="step-summary-text">Projection 把 write side 翻成可查数据</span>
               </summary>
               <div class="step-detail-body">
-                <p>Projection 消费的是 run actor 发出的 runtime `EventEnvelope` stream，再整理成 timeline、graph、snapshot 这类读侧模型。</p>
-                <p>这就是 Aevatar 里的 CQRS 分界线：actor 负责写侧，projection 负责读侧。页面上看到的执行过程，是投影后的结果。</p>
+                <p>Projection 不负责推进业务，它负责把运行中的事实翻译成更容易查、更容易展示的结果。它消费的是 run actor 发出的 runtime `EventEnvelope` stream，再整理成 snapshot、timeline、graph 这类读侧模型。</p>
+                <p>对 workflow 来说，这里其实有两条读侧分支：一条把同一条 envelope stream 投成 `WorkflowExecutionReport` 这类查询模型，供 `/api/actors/*` 去查；另一条把同一条 stream 映射成可继续往外转发的 `WorkflowRunEventEnvelope`。这就是 Aevatar 里的 CQRS 分界线：actor 负责写侧，projection 负责把写侧事实翻成读侧结果。</p>
               </div>
             </details>
 
@@ -158,8 +159,8 @@
                 <span class="step-summary-text">界面和外部系统最后消费这些结果</span>
               </summary>
               <div class="step-detail-body">
-                <p>最后，AGUIAdapter 会把 envelope 映射成前端能直接消费的运行事件，SSE 和 WebSocket 负责实时往外推。</p>
-                <p>如果要查当前 snapshot、timeline 或 graph，则走 `/api/actors/*` 这组读侧接口。用户最终看到的是这些映射和投影后的输出，而不是 actor 内部状态本身。</p>
+                <p>最后，前端和外部系统才真正消费这些结果。workflow 这条前端实时链路里，SSE 和 WebSocket 推送的不是 actor 内部状态，而是一串稳定的 `WorkflowRunEventEnvelope`；前端只需要按事件类型去渲染文本增量、step 开始/结束、工具调用和收尾状态。</p>
+                <p>再具体一点：SSE 在 accepted 之后会先发一条 `aevatar.run.context`，后面持续跟运行事件；收尾阶段还会补一条 `state_snapshot`。如果外部系统不想订流，也可以直接查 `/api/actors/*` 读侧接口拿 snapshot、timeline 或 graph。这里说的仍然是 workflow capability；scripting 也有 projection/read model，但当前仓库里没有一条和 workflow 完全同构的 AGUI 前端事件链路。</p>
               </div>
             </details>
           </div>
@@ -190,7 +191,7 @@
             </article>
             <article class="component-card">
               <h3>ScriptDefinitionGAgent</h3>
-              <p>脚本定义事实源，负责保存脚本源码、revision 和 read-model schema 信息。</p>
+              <p>脚本定义事实源，负责保存某个脚本 definition 当前这版源码、revision 和 read-model schema 信息。</p>
             </article>
             <article class="component-card">
               <h3>ScriptRuntimeGAgent</h3>
@@ -198,7 +199,7 @@
             </article>
             <article class="component-card">
               <h3>ScriptCatalogGAgent</h3>
-              <p>维护脚本当前激活 revision，负责 promote 和 rollback。</p>
+              <p>维护每个 `scriptId` 当前激活的 revision，也就是当前生效的脚本版本；同时负责 promote 和 rollback。</p>
             </article>
             <article class="component-card">
               <h3>ScriptEvolutionManagerGAgent</h3>
@@ -206,7 +207,7 @@
             </article>
             <article class="component-card">
               <h3>Projection / AGUI</h3>
-              <p>围绕 run actor id 生成 snapshot、timeline、graph 和流式事件。</p>
+              <p>`Projection` 负责围绕 run actor id 生成 snapshot、timeline、graph 这些读侧结果；workflow 当前的流式前端事件，再由 `AGUI` 适配层继续往外推。</p>
             </article>
           </div>
         </section>
