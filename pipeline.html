@@ -1,0 +1,369 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Aevatar Runtime Pipeline</title>
+    <meta
+      name="description"
+      content="Aevatar 运行骨架的解释页，展示 workflow 与 scripting 如何共享同一套 definition -> runtime 模式。">
+    <link rel="stylesheet" href="./styles.css">
+  </head>
+  <body>
+    <div class="ambient ambient-a"></div>
+    <div class="ambient ambient-b"></div>
+
+    <div class="page-shell article-shell">
+      <header class="article-hero panel">
+        <a class="back-link" href="./index.html">← 返回首页</a>
+        <p class="eyebrow">Aevatar Runtime</p>
+        <h1>Aevatar Pipeline</h1>
+        <p class="lede">
+          这页讲 Aevatar 的共用执行骨架：请求怎么进入 actor system，怎么先确定定义，再交给 workflow
+          runtime 或 scripting runtime 执行，最后再被 CQRS 投影成可消费输出。
+        </p>
+
+        <div class="stat-grid">
+          <article class="stat-card">
+            <span>Actor Model</span>
+            <strong>GAgent Runtime</strong>
+            <p>命令、状态和执行生命周期都围绕 actor 展开。</p>
+          </article>
+            <article class="stat-card">
+              <span>Definition / Runtime</span>
+              <strong>Workflow / Script</strong>
+              <p>先确定 definition，再创建 runtime。两套能力都遵守这个模式。</p>
+            </article>
+          <article class="stat-card">
+            <span>CQRS</span>
+            <strong>Projection / AGUI</strong>
+            <p>write side 在 actor 内，read side 由投影生成。</p>
+          </article>
+        </div>
+
+        <nav class="page-nav" data-nav>
+          <a href="#thesis">模型</a>
+          <a href="#lanes">三层结构</a>
+          <a href="#flow">主链路</a>
+          <a href="#components">组件</a>
+          <a href="#boundaries">边界</a>
+        </nav>
+      </header>
+
+      <main class="content">
+        <section class="panel reveal" id="thesis" data-section>
+          <div class="panel-head">
+            <p class="section-kicker">Model</p>
+            <h2>核心结构</h2>
+          </div>
+
+          <div class="definition-grid">
+            <article class="definition-card accent-blue">
+              <h3>Actor model 是执行根</h3>
+              <p>
+                请求不会直接打进一个万能对象。Host 先把输入规范化成命令，Application 再把命令路由到对应的 actor。
+              </p>
+            </article>
+            <article class="definition-card accent-sand">
+              <h3>Definition / Runtime 是两类事实源</h3>
+              <p>
+                `WorkflowGAgent` / `ScriptDefinitionGAgent` 保存“跑什么”。
+                `WorkflowRunGAgent` / `ScriptRuntimeGAgent` 保存“这次怎么跑”。
+              </p>
+            </article>
+            <article class="definition-card accent-red">
+              <h3>CQRS 把读写分开</h3>
+              <p>
+                actor 持有 write side，Projection 和 AGUI 消费 runtime envelope，生成 read model、
+                timeline、graph 和流式事件。
+              </p>
+            </article>
+            <article class="definition-card accent-blue">
+              <h3>Scripting 不是旁支</h3>
+              <p>
+                script 也走 definition actor、catalog、runtime actor、projection 这条主线。只是 workflow 跑 step，script 跑脚本包。
+              </p>
+            </article>
+          </div>
+        </section>
+
+        <section class="panel reveal" id="lanes" data-section>
+          <div class="panel-head">
+            <p class="section-kicker">Lanes</p>
+            <h2>三层结构</h2>
+          </div>
+
+          <div class="reading-grid">
+            <article class="reading-card static-card">
+              <p class="reading-tag">Control Plane</p>
+              <h3>先决定这次到底跑什么</h3>
+              <p>
+                Host 和 Application 先处理入口、命令归一化、definition 解析和 run target 建立。
+                这一层决定“这次 run 到底要跑哪份定义”。
+              </p>
+            </article>
+            <article class="reading-card static-card">
+              <p class="reading-tag">Execution Plane</p>
+              <h3>真正执行都发生在 runtime actor 内</h3>
+              <p>
+                `WorkflowRunGAgent` + `WorkflowExecutionKernel` 跑 workflow，
+                `ScriptRuntimeGAgent` 跑脚本。变量、超时、重试和挂起状态都落在 actor-owned state。
+              </p>
+            </article>
+            <article class="reading-card static-card">
+              <p class="reading-tag">Read Plane</p>
+              <h3>输出不是顺手拼的，而是投影出来的</h3>
+              <p>
+                run actor 发出的 runtime envelopes 会被 Projection 和 AGUIAdapter 消费，
+                最后变成 snapshot、timeline、graph 和 SSE / WebSocket 事件流。
+              </p>
+            </article>
+          </div>
+        </section>
+
+        <section class="panel reveal" id="flow" data-section>
+          <div class="panel-head">
+            <p class="section-kicker">Flow</p>
+            <h2>Aevatar 如何处理一次请求</h2>
+          </div>
+
+          <div class="event-ribbon" aria-label="Pipeline Transform">
+            <span>自然语言请求</span>
+            <span>判定目标</span>
+            <span>拿到定义</span>
+            <span>创建运行 actor</span>
+            <span>workflow / script 执行</span>
+            <span>读侧输出</span>
+          </div>
+
+          <p class="phase-summary">
+            这条链路讲的是：Aevatar 怎么把一句自然语言请求接住，再在关键节点分成 workflow 和 scripting 两条执行分支。当前仓库里的 `/api/chat`、`resume`、`signal` 这组 capability API 直接对应 workflow 分支；但从 Aevatar 的整体架构看，scripting 也走同样的 definition/runtime 模式。
+          </p>
+
+          <div class="step-disclosure-list">
+            <details class="step-disclosure">
+              <summary class="step-summary">
+                <span class="step-summary-index">01</span>
+                <span class="step-summary-text">自然语言请求先到 Host</span>
+              </summary>
+              <div class="step-detail-body">
+                <p>这里说的“请求”，大多数时候其实就是一句自然语言，例如“帮我分析这份需求”或者“给我生成一个 workflow”。这类请求通常通过 `POST /api/chat` 进入 Aevatar；`GET /api/ws/chat` 只是换成 WebSocket 交互，`POST /api/workflows/resume` 和 `POST /api/workflows/signal` 则是给一条已经存在的 run 发控制命令。</p>
+                <p>技术上，`Aevatar.Workflow.Host.Api` 会先做字段校验、默认值补齐和协议适配，把外部输入整理成内部命令模型，例如 `WorkflowChatRunRequest`。这一层只负责接入和协议输出，不负责保存 workflow、script 或 run 的业务状态。</p>
+              </div>
+            </details>
+
+            <details class="step-disclosure">
+              <summary class="step-summary">
+                <span class="step-summary-index">02</span>
+                <span class="step-summary-text">Application 先判断这句请求该怎么接</span>
+              </summary>
+              <div class="step-detail-body">
+                <p>进入框架内部之后，这句自然语言不会立刻触发 step 执行。Application 会先判断：这是一条新请求，需要新开一次 run；还是一条控制请求，要恢复一个挂起中的 run，或者给运行中的 actor 发 signal。</p>
+                <p>技术上，这一步会进入 command pipeline，由 resolver 和 binder 决定目标 actor、projection lease 和 live sink 应该怎么挂。它解决的是“由谁接手这次请求”，不是“马上调用哪个模型”。后面所有状态变化都会围绕 actor id 展开。</p>
+              </div>
+            </details>
+
+            <details class="step-disclosure">
+              <summary class="step-summary">
+                <span class="step-summary-index">03</span>
+                <span class="step-summary-text">先找到对的 workflow，或者对的 script revision</span>
+              </summary>
+              <div class="step-detail-body">
+                <p>这一步要解决的不是“有没有流程可跑”，而是“这次到底该跑哪一个，而且要跑对”。如果这次请求走 workflow，系统会先把正确的 YAML 定位出来。来源可以是 registry workflow、inline YAML，或者已经绑定 definition 的 source actor；如果用户显式指定了 workflow name，还要确认它和 source binding 是一致的，避免跑错流程。</p>
+                <p>技术上，named workflow 往往会被解析到稳定的 definition actor，例如 `workflow-definition:{workflow_name_lower}`。如果这次请求走 scripting，系统则先通过 `ScriptCatalogGAgent` 找到当前激活 revision，再由 `ScriptDefinitionGAgent` 提供脚本源码、脚本包和 schema。这一步本质上是在回答“这次 run 的 definition 是谁”。</p>
+              </div>
+            </details>
+
+            <details class="step-disclosure">
+              <summary class="step-summary">
+                <span class="step-summary-index">04</span>
+                <span class="step-summary-text">再为这次运行单独开一个 runtime actor</span>
+              </summary>
+              <div class="step-detail-body">
+                <p>拿到 definition 之后，Aevatar 不会直接在 definition actor 上执行，而是会为这次运行单独开一个 runtime actor。这样做的好处很直接：同一个 workflow definition 可以被多次复用，而每次 run 的暂停、恢复、失败、重试都能彼此隔离。</p>
+                <p>workflow 这边的执行载体是 `WorkflowRunGAgent`，scripting 这边是 `ScriptRuntimeGAgent`。这次运行用到的 `RunId`、变量、挂起点、重试、超时、最终结果和错误信息，都会落在这个 runtime actor 里。技术上，workflow command path 还会在真正派发开始命令之前，把 projection lease 和 live sink 先挂好。</p>
+              </div>
+            </details>
+
+            <details class="step-disclosure">
+              <summary class="step-summary">
+                <span class="step-summary-index">05</span>
+                <span class="step-summary-text">runtime actor 开始真正执行</span>
+              </summary>
+              <div class="step-detail-body">
+                <p>到这一步，runtime actor 才开始真正干活。workflow 路径里，`WorkflowExecutionKernel` 会从 `StartWorkflowEvent` 开始推进主循环，把流程一步步往前推。每到一个 step，就会发出 `StepRequestEvent`；对应模块处理完之后，再回一个 `StepCompletedEvent`，内核据此决定下一步该走哪里。</p>
+                <p>具体执行 step 的，是一组按类型分工的 modules。`llm_call` 往往会交给 run-scoped `RoleGAgent`；`connector_call` 由 connector 模块去调用外部能力；`wait_signal`、`human_input`、`human_approval` 会把 run 挂起，等后续 `signal` 或 `resume` 再继续。也就是说，workflow 不是“把 YAML 从上到下读一遍”，而是一个事件驱动的调度循环。</p>
+                <p>scripting 路径里，`ScriptRuntimeGAgent` 会先查询 definition snapshot，拿到脚本源码和包之后再执行脚本逻辑。换句话说，第 5 步不是简单说一句“这里分岔”就结束了，而是 workflow runtime 和 script runtime 各自进入自己的执行引擎。</p>
+              </div>
+            </details>
+
+            <details class="step-disclosure">
+              <summary class="step-summary">
+                <span class="step-summary-index">06</span>
+                <span class="step-summary-text">执行过程中的状态和事件持续写回 actor</span>
+              </summary>
+              <div class="step-detail-body">
+                <p>运行不是黑箱。每一步开始、完成、失败、挂起或恢复，runtime actor 都会把状态变化和运行事件写回自己的事实源。workflow run 和 script run 都遵循这个模式，所以一条 run 走到哪一步、为什么停住、最后为什么失败，理论上都能追出来。</p>
+                <p>技术上，这就是 Aevatar 的 write side。对 workflow 来说，definition binding、`WorkflowRunExecutionStartedEvent`、`WorkflowCompletedEvent`，以及模块自己的 `ExecutionStates` 都会落在 run actor 里；挂起点、超时 lease、等待中的输入状态也都在这里。恢复执行时，系统靠的正是这些已经写回去的事实。</p>
+              </div>
+            </details>
+
+            <details class="step-disclosure">
+              <summary class="step-summary">
+                <span class="step-summary-index">07</span>
+                <span class="step-summary-text">Projection 把 write side 翻成可查询的读侧数据</span>
+              </summary>
+              <div class="step-detail-body">
+                <p>Projection 不负责推进业务，它负责“翻译”。它会消费 runtime actor 发出的 runtime `EventEnvelope` stream，把原本偏执行侧的消息整理成 timeline、graph、snapshot、report 这类更适合查询和展示的读侧数据。</p>
+                <p>技术上，workflow projection 当前是 run-isolated 语义，projection root 通常就是 runtime actor id。这里也是 CQRS 的分界线：actor 保存 definition facts 和 runtime facts，projection 则把这些写侧事实转换成查询友好的 read model。你在页面上看到的执行时间线，不是 controller 临时拼出来的，而是投影后的结果。</p>
+              </div>
+            </details>
+
+            <details class="step-disclosure">
+              <summary class="step-summary">
+                <span class="step-summary-index">08</span>
+                <span class="step-summary-text">界面和外部系统最后消费这些结果</span>
+              </summary>
+              <div class="step-detail-body">
+                <p>到这一步，前端和外部系统才真正看到“结果”。有些结果是实时流出来的，例如文本增量、step 开始/结束、等待 signal；有些结果是查询出来的，例如当前 snapshot、timeline、graph，或者 run 完成后的最终状态。</p>
+                <p>技术上，`AGUIAdapter` 会把 runtime `EventEnvelope` 映射成前端能消费的 `WorkflowRunEvent`，再通过 SSE 或 WebSocket 持续推送。如果要查当前 snapshot、timeline 或 graph，则走 `/api/actors/*` 这组 read-side 查询接口。也就是说，用户最终看到的是被映射和投影后的输出，而不是 actor 内部状态本身。</p>
+              </div>
+            </details>
+          </div>
+        </section>
+
+        <section class="panel reveal" id="components" data-section>
+          <div class="panel-head">
+            <p class="section-kicker">Components</p>
+            <h2>关键组件</h2>
+          </div>
+
+          <div class="component-grid">
+            <article class="component-card">
+              <h3>WorkflowGAgent</h3>
+              <p>workflow 的 definition actor。绑定并校验 YAML，但不直接跑步骤。</p>
+            </article>
+            <article class="component-card">
+              <h3>WorkflowRunGAgent</h3>
+              <p>workflow 的 run actor。保存 `RunId`、`Status`、`FinalOutput`、`ExecutionStates` 等运行事实。</p>
+            </article>
+            <article class="component-card">
+              <h3>WorkflowExecutionKernel</h3>
+              <p>workflow 的主循环，负责 `StartWorkflowEvent -> StepRequestEvent -> StepCompletedEvent -> WorkflowCompletedEvent`。</p>
+            </article>
+            <article class="component-card">
+              <h3>RoleGAgent</h3>
+              <p>按 YAML `roles` 派生的子 actor，用来承接 `llm_call` 等角色化任务。</p>
+            </article>
+            <article class="component-card">
+              <h3>WorkflowStepTargetAgentResolver</h3>
+              <p>把 `target_role` 或 `agent_type` 解析成真实目标 actor，可挂接自定义 `IAgent`。</p>
+            </article>
+            <article class="component-card">
+              <h3>Projection + AGUI</h3>
+              <p>前者生成 read model，后者把运行时消息变成前端事件流。</p>
+            </article>
+          </div>
+
+          <div class="panel-head compact-head">
+            <p class="section-kicker">Scripting Lane</p>
+            <h3>脚本能力的关键 actor</h3>
+          </div>
+
+          <div class="component-grid">
+            <article class="component-card">
+              <h3>ScriptDefinitionGAgent</h3>
+              <p>脚本定义事实源。负责 upsert 脚本源码、编译脚本包，并记录 read-model schema 的声明和校验状态。</p>
+            </article>
+            <article class="component-card">
+              <h3>ScriptCatalogGAgent</h3>
+              <p>脚本版本目录。负责维护每个脚本当前激活的 revision，以及 promote / rollback 结果。</p>
+            </article>
+            <article class="component-card">
+              <h3>ScriptRuntimeGAgent</h3>
+              <p>脚本运行事实源。收到 run 请求后，会先查询 definition snapshot，再执行真正的脚本运行。</p>
+            </article>
+            <article class="component-card">
+              <h3>ScriptEvolutionManagerGAgent</h3>
+              <p>记录脚本演进提案的生命周期，包括 proposed、validated、promoted 和 rolled back。</p>
+            </article>
+          </div>
+
+          <div class="primitive-grid">
+            <article class="primitive-card">
+              <h3>编排类</h3>
+              <p><code>conditional</code> <code>switch</code> <code>while</code> <code>workflow_call</code> <code>parallel</code> <code>race</code> <code>foreach</code> <code>map_reduce</code></p>
+            </article>
+            <article class="primitive-card">
+              <h3>AI / 决策类</h3>
+              <p><code>llm_call</code> <code>evaluate</code> <code>reflect</code></p>
+            </article>
+            <article class="primitive-card">
+              <h3>数据 / 控制类</h3>
+              <p><code>assign</code> <code>transform</code> <code>retrieve_facts</code> <code>cache</code> <code>guard</code> <code>delay</code> <code>emit</code> <code>checkpoint</code></p>
+            </article>
+            <article class="primitive-card">
+              <h3>外部能力类</h3>
+              <p><code>connector_call</code> <code>tool_call</code> <code>actor_send</code></p>
+            </article>
+            <article class="primitive-card">
+              <h3>挂起 / 恢复类</h3>
+              <p><code>human_input</code> <code>human_approval</code> <code>secure_input</code> <code>wait_signal</code></p>
+            </article>
+            <article class="primitive-card">
+              <h3>内部辅助类</h3>
+              <p><code>workflow_yaml_validate</code> <code>dynamic_workflow</code></p>
+            </article>
+          </div>
+        </section>
+
+        <section class="panel reveal" id="boundaries" data-section>
+          <div class="panel-head">
+            <p class="section-kicker">Boundaries</p>
+            <h2>责任边界</h2>
+          </div>
+
+          <div class="boundary-table" role="table" aria-label="Layer Boundaries">
+            <div class="boundary-row boundary-head" role="row">
+              <span role="columnheader">层</span>
+              <span role="columnheader">负责什么</span>
+              <span role="columnheader">不负责什么</span>
+            </div>
+            <div class="boundary-row" role="row">
+              <strong role="cell">Host / Protocol</strong>
+              <span role="cell">HTTP、WebSocket 入口；SSE / 查询输出；请求规范化；协议输出。</span>
+              <span role="cell">不编排 workflow / script，不维护 actor 事实状态。</span>
+            </div>
+            <div class="boundary-row" role="row">
+              <strong role="cell">Application</strong>
+              <span role="cell">解析 source、决定 run target、建立 projection lease、挂接 live sink。</span>
+              <span role="cell">不直接执行 step，不直接持有 workflow / script 的运行事实。</span>
+            </div>
+            <div class="boundary-row" role="row">
+              <strong role="cell">Core</strong>
+              <span role="cell">definition actor、run actor、执行内核、脚本 runtime、内置 modules。</span>
+              <span role="cell">不做协议层适配，不提供查询接口。</span>
+            </div>
+            <div class="boundary-row" role="row">
+              <strong role="cell">Infrastructure</strong>
+              <span role="cell">workflow 文件加载、actor port runtime adapter、capability endpoint 装配、报告落盘。</span>
+              <span role="cell">不维护 workflow 事实边界，不替代 Application 编排 run。</span>
+            </div>
+            <div class="boundary-row" role="row">
+              <strong role="cell">Projection</strong>
+              <span role="cell">run-isolated read model、timeline、graph、snapshot。</span>
+              <span role="cell">不直接决定业务推进。</span>
+            </div>
+            <div class="boundary-row" role="row">
+              <strong role="cell">AGUI Adapter</strong>
+              <span role="cell">消费 run actor envelope，并映射成 `WorkflowRunEvent`。</span>
+              <span role="cell">不直接读 Event Store，也不直接读 actor state 拼 UI。</span>
+            </div>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <script src="./app.js"></script>
+  </body>
+</html>

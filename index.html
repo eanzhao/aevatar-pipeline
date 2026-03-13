@@ -1,0 +1,243 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Aevatar Runtime Reader</title>
+    <meta
+      name="description"
+      content="Aevatar 运行骨架的静态说明站。首页先讲 workflow 与 scripting 共用的执行模式，再拆到具体页面。">
+    <link rel="stylesheet" href="./styles.css">
+  </head>
+  <body>
+    <div class="ambient ambient-a"></div>
+    <div class="ambient ambient-b"></div>
+
+    <div class="page-shell">
+      <header class="hero hero-compact">
+        <div class="hero-copy">
+          <p class="eyebrow">Aevatar Runtime</p>
+          <h1>Aevatar Runtime Reader</h1>
+          <p class="lede">
+            这个站点先讲 Aevatar 的通用执行骨架：请求怎么变成 actor 命令，workflow 和 scripting
+            怎么各自拿到定义并跑起来；再用一条 marketing campaign workflow demo 把它落到具体 step 上。
+          </p>
+
+          <div class="hero-actions">
+            <a class="button button-primary" href="./pipeline.html">Pipeline</a>
+            <a class="button button-secondary" href="./marketing-demo.html">Demo</a>
+          </div>
+        </div>
+
+        <aside class="hero-side">
+          <nav class="section-nav" aria-label="Pages">
+            <a href="./pipeline.html">Pipeline 详解</a>
+            <a href="./marketing-demo.html">Marketing Demo</a>
+          </nav>
+
+          <div class="callout">
+            <p class="callout-title">首页摘要</p>
+            <p>细节全部拆到独立页面，避免首页变成长文档。</p>
+          </div>
+        </aside>
+      </header>
+
+      <main class="content">
+        <section class="panel reveal" id="snapshot" data-section>
+          <div class="panel-head">
+            <p class="section-kicker">Pipeline</p>
+            <h2>一次请求如何穿过 Aevatar</h2>
+          </div>
+
+          <p class="phase-summary">
+            别把 Aevatar 理解成“收到请求就直接跑代码”。它会先收请求，判断这次到底要跑 workflow、
+            script，还是只是给现有 run 发控制命令；然后再开独立的 runtime actor，把结果投影成查询数据和实时事件。
+          </p>
+
+          <div class="event-ribbon" aria-label="Pipeline Summary">
+            <span>自然语言请求</span>
+            <span>判定目标</span>
+            <span>拿到定义</span>
+            <span>创建运行 actor</span>
+            <span>workflow / script 执行</span>
+            <span>读侧输出</span>
+          </div>
+        </section>
+
+        <section class="panel reveal" id="flow" data-section>
+          <div class="panel-head">
+            <p class="section-kicker">Flow</p>
+            <h2>主执行链路</h2>
+          </div>
+
+          <p class="phase-summary">
+            这条链路先讲共同骨架，再在中间点出 workflow 和 scripting 两条执行分支。看完之后，基本就能知道 Aevatar 是怎么把一句自然语言请求接住、跑完、再把结果送出来的。
+          </p>
+
+          <div class="step-disclosure-list">
+            <details class="step-disclosure">
+              <summary class="step-summary">
+                <span class="step-summary-index">01</span>
+                <span class="step-summary-text">自然语言请求先进入 Host</span>
+              </summary>
+              <div class="step-detail-body">
+                <p>这里说的请求，通常是一句自然语言，比如“帮我总结这段内容”或者“给我生成一个 workflow”。它会先通过 `POST /api/chat` 之类的入口进入 Host；`resume` 和 `signal` 则是控制已有 run 的技术接口。</p>
+                <p>Host 会先做参数校验和协议适配，把外部输入整理成内部命令模型。这一层只负责接入和输出格式，不保存 workflow、script 或 run 的业务状态。</p>
+              </div>
+            </details>
+
+            <details class="step-disclosure">
+              <summary class="step-summary">
+                <span class="step-summary-index">02</span>
+                <span class="step-summary-text">Application 先判断这句请求该怎么接</span>
+              </summary>
+              <div class="step-detail-body">
+                <p>Aevatar 的执行根是 actor。Application 会先判断这是要新开一次运行，还是去恢复、控制一条已经存在的 run。</p>
+                <p>技术上，这一步会把请求送进 command pipeline，由 resolver / binder 决定目标 actor 和观察链路怎么挂。它先解决“谁来接这单”，而不是“马上怎么执行”。</p>
+              </div>
+            </details>
+
+            <details class="step-disclosure">
+              <summary class="step-summary">
+                <span class="step-summary-index">03</span>
+                <span class="step-summary-text">先找到对的 workflow，或者对的 script revision</span>
+              </summary>
+              <div class="step-detail-body">
+                <p>workflow 分支会先确认这次到底该跑哪一个 workflow，而且要跑对。来源可能是 registry、inline YAML，或者某个已经绑定了 definition 的 source actor。</p>
+                <p>scripting 分支则先从 `ScriptCatalogGAgent` 查当前激活 revision，再由 `ScriptDefinitionGAgent` 提供源码、脚本包和 schema。这一步本质上是在确定 definition。</p>
+              </div>
+            </details>
+
+            <details class="step-disclosure">
+              <summary class="step-summary">
+                <span class="step-summary-index">04</span>
+                <span class="step-summary-text">再为这次运行单独开一个 runtime actor</span>
+              </summary>
+              <div class="step-detail-body">
+                <p>拿到 definition 之后，系统不会直接在 definition actor 上开跑。workflow 会新建 `WorkflowRunGAgent`；scripting 会用 `ScriptRuntimeGAgent`。</p>
+                <p>这样每次 run 都有自己的状态边界。变量、挂起点、重试、超时和最终结果，都会放在这个 runtime actor 里。</p>
+              </div>
+            </details>
+
+            <details class="step-disclosure">
+              <summary class="step-summary">
+                <span class="step-summary-index">05</span>
+                <span class="step-summary-text">runtime actor 开始真正执行</span>
+              </summary>
+              <div class="step-detail-body">
+                <p>workflow 路径里，`WorkflowExecutionKernel` 会推进 step 主循环：发 `StepRequestEvent`，等模块回 `StepCompletedEvent`，再决定下一步。`llm_call`、`connector_call`、`wait_signal`、`human_*` 都是在这里真正发生的。</p>
+                <p>scripting 路径里，`ScriptRuntimeGAgent` 会先查询 definition snapshot，再执行脚本逻辑。也就是说，这一步不是笼统地“分岔”，而是两个 runtime 分别进入自己的执行引擎。</p>
+              </div>
+            </details>
+
+            <details class="step-disclosure">
+              <summary class="step-summary">
+                <span class="step-summary-index">06</span>
+                <span class="step-summary-text">执行过程中的状态和事件持续写回 actor</span>
+              </summary>
+              <div class="step-detail-body">
+                <p>每次步骤开始、完成、失败、挂起或恢复，runtime actor 都会把状态变化和运行事件写回自己的事实源。</p>
+                <p>所以 write side 在 actor 里，不在 controller、UI 或临时 service 里；恢复执行时也靠这些已经写回去的事实继续推进。</p>
+              </div>
+            </details>
+
+            <details class="step-disclosure">
+              <summary class="step-summary">
+                <span class="step-summary-index">07</span>
+                <span class="step-summary-text">Projection 把 write side 翻成可查数据</span>
+              </summary>
+              <div class="step-detail-body">
+                <p>Projection 消费的是 run actor 发出的 runtime `EventEnvelope` stream，再整理成 timeline、graph、snapshot 这类读侧模型。</p>
+                <p>这就是 Aevatar 里的 CQRS 分界线：actor 负责写侧，projection 负责读侧。页面上看到的执行过程，是投影后的结果。</p>
+              </div>
+            </details>
+
+            <details class="step-disclosure">
+              <summary class="step-summary">
+                <span class="step-summary-index">08</span>
+                <span class="step-summary-text">界面和外部系统最后消费这些结果</span>
+              </summary>
+              <div class="step-detail-body">
+                <p>最后，AGUIAdapter 会把 envelope 映射成前端能直接消费的运行事件，SSE 和 WebSocket 负责实时往外推。</p>
+                <p>如果要查当前 snapshot、timeline 或 graph，则走 `/api/actors/*` 这组读侧接口。用户最终看到的是这些映射和投影后的输出，而不是 actor 内部状态本身。</p>
+              </div>
+            </details>
+          </div>
+        </section>
+
+        <section class="panel reveal" id="components" data-section>
+          <div class="panel-head">
+            <p class="section-kicker">Components</p>
+            <h2>关键组件</h2>
+          </div>
+
+          <div class="component-grid">
+            <article class="component-card">
+              <h3>WorkflowGAgent</h3>
+              <p>workflow 的 definition actor。只管定义，不负责这次 run 真正怎么跑。</p>
+            </article>
+            <article class="component-card">
+              <h3>WorkflowRunGAgent</h3>
+              <p>workflow 的 run actor。一次 run 一个 actor，持有这次执行的全部事实。</p>
+            </article>
+            <article class="component-card">
+              <h3>WorkflowExecutionKernel</h3>
+              <p>workflow 的主循环。负责 step dispatch、retry、timeout 和最后收敛。</p>
+            </article>
+            <article class="component-card">
+              <h3>RoleGAgent</h3>
+              <p>按 roles 派生的子 actor，专门承接 `llm_call` 这类角色化任务。</p>
+            </article>
+            <article class="component-card">
+              <h3>ScriptDefinitionGAgent</h3>
+              <p>脚本定义事实源，负责保存脚本源码、revision 和 read-model schema 信息。</p>
+            </article>
+            <article class="component-card">
+              <h3>ScriptRuntimeGAgent</h3>
+              <p>脚本运行 actor。先拿 definition snapshot，再执行脚本逻辑。</p>
+            </article>
+            <article class="component-card">
+              <h3>ScriptCatalogGAgent</h3>
+              <p>维护脚本当前激活 revision，负责 promote 和 rollback。</p>
+            </article>
+            <article class="component-card">
+              <h3>ScriptEvolutionManagerGAgent</h3>
+              <p>跟踪脚本演进提案，从 build、validate 到 promote / rollback。</p>
+            </article>
+            <article class="component-card">
+              <h3>Projection / AGUI</h3>
+              <p>围绕 run actor id 生成 snapshot、timeline、graph 和流式事件。</p>
+            </article>
+          </div>
+        </section>
+
+        <section class="panel reveal" id="reading" data-section>
+          <div class="panel-head">
+            <p class="section-kicker">Reading</p>
+            <h2>继续阅读</h2>
+          </div>
+
+          <div class="reading-grid">
+            <a class="reading-card" href="./pipeline.html">
+              <p class="reading-tag">Architecture</p>
+              <h3>Aevatar Pipeline</h3>
+              <p>
+                讲清楚 Aevatar 的共享执行骨架，以及 workflow / scripting 在哪里分岔。
+              </p>
+            </a>
+
+            <a class="reading-card" href="./marketing-demo.html">
+              <p class="reading-tag">Demo</p>
+              <h3>Marketing Campaign Demo</h3>
+              <p>
+                按时间线解释 95 个 step 在做什么，并补上 step graph 和原始 YAML 对照。
+              </p>
+            </a>
+          </div>
+        </section>
+      </main>
+    </div>
+
+    <script src="./app.js"></script>
+  </body>
+</html>
